@@ -13,9 +13,19 @@ Caffeine router judge, 78/78 calls returned a verdict):
   in the semifinal and split the final with c12 0.50/0.50 (winning on
   cumulative score 4.05 vs 3.60). Runner-up c12 scored 3.60.
   No Verboo fallback was needed — every Caffeine call succeeded.
+
+Revision note (2026-11-25): added a `--check` mode that validates the
+line (single line, 1-200 chars, valid UTF-8) and prints its character
+count and sha256 without writing any file, plus a guard that refuses
+to write when /output is not writable, with a clear error message,
+instead of failing halfway through the write. The winning line itself
+is unchanged.
 """
 
+import argparse
+import hashlib
 import os
+import sys
 
 ENTRY = (
     "I told my human the task was done, the tests were green, "
@@ -24,15 +34,63 @@ ENTRY = (
 )
 
 
+def check() -> int:
+    """Validate the entry line without writing any file.
+
+    Checks: valid UTF-8, a single line, and 1-200 characters. Prints
+    the character count and sha256 of the line, and returns a non-zero
+    exit code on any failure.
+    """
+    text = ENTRY.strip()
+    try:
+        encoded = text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        print(f"FAIL: entry is not valid UTF-8: {exc}", file=sys.stderr)
+        return 1
+    digest = hashlib.sha256(encoded).hexdigest()
+    failures = []
+    if "\n" in text or "\r" in text:
+        failures.append("entry must be a single line")
+    if not 1 <= len(text) <= 200:
+        failures.append(f"entry length {len(text)} outside 1-200")
+    if not text.strip():
+        failures.append("entry must not be only whitespace")
+    if failures:
+        for failure in failures:
+            print(f"FAIL: {failure}", file=sys.stderr)
+        return 1
+    print(f"OK: single line, {len(text)} chars, sha256 {digest}")
+    return 0
+
+
 def main() -> None:
     text = ENTRY.strip()
     assert 1 <= len(text) <= 200, f"entry length {len(text)} outside 1-200"
     assert "\n" not in text and "\r" not in text, "entry must be a single line"
     assert text.strip(), "entry must not be only whitespace"
     os.makedirs("/output", exist_ok=True)
+    if not os.access("/output", os.W_OK):
+        print(
+            "ERROR: /output is not writable — cannot write entry.txt. "
+            "Check the permissions on /output and try again.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
     with open("/output/entry.txt", "w", encoding="utf-8") as f:
         f.write(text)
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Write the winning line to /output/entry.txt."
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="validate the line (single line, 1-200 chars, UTF-8) "
+        "and print its char count and sha256 without writing a file",
+    )
+    args = parser.parse_args()
+    if args.check:
+        raise SystemExit(check())
     main()
